@@ -3,87 +3,90 @@ import Papa from 'papaparse';
 import { useStore } from '../store';
 import { Medicine } from '../types';
 
-// Public CSV export URL — works without any OAuth token as long as
-// the Google Sheet is shared as "Anyone with the link can view".
-const SHEET_CSV_URL =
-  'https://docs.google.com/spreadsheets/d/14Wkx7ovPDIZoiKdMvtIQtcOWGanJ-VGa/export?format=csv&gid=1828864267';
+const SHEET_ID = '14Wkx7ovPDIZoiKdMvtIQtcOWGanJ-VGa';
+const SHEET_NAME = 'LIST';
+const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
+const PROXY_URL = `https://corsproxy.io/?${encodeURIComponent(CSV_URL)}`;
 
-// Column header patterns to match (case-insensitive, partial match)
 const findCol = (headers: string[], patterns: string[]): number => {
   for (const pattern of patterns) {
-    const idx = headers.findIndex((h) => h.toLowerCase().includes(pattern));
-    if (idx >= 0) return idx;
+    const idx = headers.findIndex(h =>
+      h.toLowerCase().includes(pattern.toLowerCase())
+    );
+    if (idx !== -1) return idx;
   }
   return -1;
 };
 
 export function useGoogleSheetsSync() {
-  const { syncComplete } = useStore();
+  const { dispatch } = useStore();
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncData, setSyncData] = useState<Medicine[] | null>(null);
 
-  const syncData = useCallback(async () => {
+  const syncSheet = useCallback(async () => {
     setSyncing(true);
     setError(null);
 
     try {
-      // Fetch CSV via a CORS proxy (allorigins) because the Google Sheets
-      // export endpoint does not send CORS headers for direct browser access.
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(SHEET_CSV_URL)}`;
+      console.log('[Sync] Fetching via corsproxy.io...');
+      const response = await fetch(PROXY_URL, { signal: AbortSignal.timeout(20000) });
 
-      const response = await fetch(proxyUrl);
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const csvText = await response.text();
+      console.log('[Sync] CSV received, length:', csvText.length);
 
       const parsed = Papa.parse<string[]>(csvText, {
         skipEmptyLines: true,
       });
 
-      const rows: string[][] = parsed.data as string[][];
-      if (!rows || rows.length < 2) {
-        throw new Error('Sheet returned no data.');
+      if (!parsed.data || parsed.data.length < 2) {
+        throw new Error('No data rows found in sheet');
       }
 
-      // Row 0 = headers
-      const headers = rows[0].map((h) => (h || '').trim());
+      const headers = (parsed.data[0] as string[]).map(h => h.trim());
+      console.log('[Sync] Headers:', headers);
 
-      const nameCol    = findCol(headers, ['medicine names', 'medicine name', 'name', 'item']);
-      const sizeCol    = findCol(headers, ['product group', 'size', 'group code']);
-      const potencyCol = findCol(headers, ['potency']);
-      const categoryCol= findCol(headers, ['item category', 'category code', 'category']);
-      const qtyCol     = findCol(headers, ['quantity', 'qty', 'stock']);
-      const costCol    = findCol(headers, ['amout', 'amount', 'cost', 'price', 'er head']);
-      const companyCol = findCol(headers, ['company 1', 'company']);
+      const nameCol   = findCol(headers, ['medicine names', 'medicine', 'name']);
+      const sizeCol   = findCol(headers, ['product group', 'size', 'group']);
+      const potCol    = findCol(headers, ['potency', 'pot']);
+      const catCol    = findCol(headers, ['item category', 'category', 'cat']);
+      const qtyCol    = findCol(headers, ['quantity', 'qty', 'stock']);
+      const priceCol  = findCol(headers, ['amout', 'amount', 'price', 'cost']);
+      const compCol   = findCol(headers, ['company', 'comp']);
 
-      const freshMedicines: Medicine[] = [];
+      const medicines: Medicine[] = [];
+      let skipped = 0;
 
-      rows.slice(1).forEach((row, idx) => {
-        const name = (nameCol >= 0 ? row[nameCol] : '').trim();
-        if (!name) return;
+      for (let i = 1; i < parsed.data.length; i++) {
+        const row = parsed.data[i] as string[];
+        const name = nameCol >= 0 ? (row[nameCol] || '').trim() : '';
+        if (!name || name.toLowerCase() === 'medicine names') {
+          skipped++;
+          continue;
+        }
 
-        const qty  = parseInt((qtyCol >= 0 ? row[qtyCol] : '0') || '0', 10) || 0;
-        const rawCat = ((categoryCol >= 0 ? row[categoryCol] : '') || 'MT').toUpperCase();
-        const category = rawCat.includes('DIL') ? 'DIL' : 'MT';
-        const potency  = ((potencyCol >= 0 ? row[potencyCol] : '') || 'Q').trim();
-        const size     = ((sizeCol >= 0 ? row[sizeCol] : '') || '100 ML').trim();
-        const company  = ((companyCol >= 0 ? row[companyCol] : '') || 'UNKNOWN').trim().toUpperCase();
-        const cost     = ((costCol >= 0 ? row[costCol] : '') || '0').trim();
+        const qty = qtyCol >= 0 ? parseInt(row[qtyCol] || '0', 10) : 0;
 
-        freshMedicines.push({
-          id: `SHEET-${idx}-${name.substring(0, 8).replace(/\s/g, '').toUpperCase()}`,
+        medicines.push({
+          id: `sheet-${i}`,
           name,
-          size,
-          potency,
-          category,
-          company,
-          cost,
-          qty,
+          size:     sizeCol  >= 0 ? (row[sizeCol]  || '').trim() : '',
+          potency:  potCol   >= 0 ? (row[potCol]   || '').trim() : '',
+          category: catCol   >= 0 ? (row[catCol]   || '').trim() : '',
+          quantity: isNaN(qty) ? 0 : qty,
+          price:    priceCol >= 0 ? parseFloat(row[priceCol] || '0') || 0 : 0,
+          company:  compCol  >= 0 ? (row[compCol]  || '').trim() : '',
         });
-      });
+      }
 
-      syncComplete(freshMedicines);
-      console.log(`[Sync] ${freshMedicines.length} medicines loaded from Google Sheets.`);
+      console.log(`[Sync] Parsed ${medicines.length} medicines, skipped ${skipped} rows`);
+
+      dispatch({ type: 'SYNC_COMPLETE', payload: medicines });
+      setSyncData(medicines);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[Sync] Failed:', msg);
@@ -91,7 +94,7 @@ export function useGoogleSheetsSync() {
     } finally {
       setSyncing(false);
     }
-  }, [syncComplete]);
+  }, [dispatch]);
 
-  return { syncing, syncData, error };
+  return { syncing, syncData, error, syncSheet };
 }
