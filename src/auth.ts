@@ -8,6 +8,9 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 let cachedAccessToken: string | null = null;
 let currentUser: User | null = null;
 
+// The deployed GitHub Pages URL for redirect after OAuth
+const REDIRECT_URL = 'https://ihkarise.github.io/wisemedicinestock/';
+
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthFailure?: () => void
@@ -49,7 +52,7 @@ export const initAuth = (
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   if (supabaseUrl === 'https://placeholder.supabase.co') {
-    alert("Supabase integration requires configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment, and configure Google auth provider inside Supabase Dashboard.");
+    alert('Supabase integration requires configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
     throw new Error('Supabase configuration missing.');
   }
 
@@ -57,21 +60,26 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     provider: 'google',
     options: {
       scopes: 'https://www.googleapis.com/auth/spreadsheets',
-      // Using redirect for OAuth to conform to standard GH pages behavior where popups might get blocked or cross-origin isn't ideal.
-    }
+      redirectTo: REDIRECT_URL,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
   });
-  
-  if (error) {
-    console.error('Sign in error:', error);
-    throw error;
-  }
-  
-  // NOTE: This will redirect. The return empty here handles logic post-redirect.
-  return null;
+
+  if (error) throw error;
+  return null; // OAuth redirect flow, auth state handled by onAuthStateChange
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  if (cachedAccessToken) return cachedAccessToken;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.provider_token) {
+    cachedAccessToken = session.provider_token;
+    return cachedAccessToken;
+  }
+  return null;
 };
 
 export const logout = async () => {
