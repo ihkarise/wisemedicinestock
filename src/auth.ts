@@ -1,89 +1,60 @@
-import { createClient, User } from '@supabase/supabase-js';
+import { createClient, User, Session } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'placeholder-key';
+// Supports both VITE_ and NEXT_PUBLIC_ prefixes for flexibility
+const supabaseUrl =
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
+  'https://placeholder.supabase.co';
+
+const supabaseKey =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  'placeholder-key';
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
-let cachedAccessToken: string | null = null;
-let currentUser: User | null = null;
+export type AuthUser = User;
 
-// The deployed GitHub Pages URL for redirect after OAuth
-const REDIRECT_URL = 'https://ihkarise.github.io/wisemedicinestock/';
+// ── Supabase-native auth (Magic Link / Email OTP) ──────────────────────────
 
-export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) {
-      currentUser = session.user;
-      cachedAccessToken = session.provider_token || null;
-      if (cachedAccessToken && onAuthSuccess) {
-        onAuthSuccess(session.user, cachedAccessToken);
-      } else if (onAuthFailure) {
-        onAuthFailure();
-      }
-    } else {
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
-
-  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-    if (session) {
-      currentUser = session.user;
-      cachedAccessToken = session.provider_token || null;
-      if (cachedAccessToken && onAuthSuccess) {
-        onAuthSuccess(session.user, cachedAccessToken);
-      } else if (onAuthFailure && !cachedAccessToken) {
-        onAuthFailure();
-      }
-    } else {
-      currentUser = null;
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
-
-  return () => {
-    subscription.unsubscribe();
-  };
-};
-
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+/**
+ * Send a magic-link email. The user clicks the link and is redirected back.
+ * No Google Cloud Console setup required.
+ */
+export const sendMagicLink = async (email: string): Promise<void> => {
   if (supabaseUrl === 'https://placeholder.supabase.co') {
-    alert('Supabase integration requires configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+    alert('Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or NEXT_PUBLIC_ variants).');
     throw new Error('Supabase configuration missing.');
   }
-
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
     options: {
-      scopes: 'https://www.googleapis.com/auth/spreadsheets',
-      redirectTo: REDIRECT_URL,
-      queryParams: {
-        access_type: 'offline',
-        prompt: 'consent',
-      },
+      emailRedirectTo: window.location.origin + window.location.pathname,
     },
   });
-
   if (error) throw error;
-  return null; // OAuth redirect flow, auth state handled by onAuthStateChange
 };
 
-export const getAccessToken = async (): Promise<string | null> => {
-  if (cachedAccessToken) return cachedAccessToken;
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.provider_token) {
-    cachedAccessToken = session.provider_token;
-    return cachedAccessToken;
-  }
-  return null;
-};
-
-export const logout = async () => {
+/** Sign out the current user. */
+export const logout = async (): Promise<void> => {
   await supabase.auth.signOut();
-  cachedAccessToken = null;
-  currentUser = null;
+};
+
+/** Get the current session (null if not logged in). */
+export const getSession = async (): Promise<Session | null> => {
+  const { data } = await supabase.auth.getSession();
+  return data.session;
+};
+
+/**
+ * Subscribe to auth state changes.
+ * Returns an unsubscribe function.
+ */
+export const onAuthChange = (
+  callback: (user: User | null) => void
+): (() => void) => {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    callback(session?.user ?? null);
+  });
+  return () => subscription.unsubscribe();
 };
