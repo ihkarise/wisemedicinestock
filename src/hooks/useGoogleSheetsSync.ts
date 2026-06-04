@@ -19,7 +19,7 @@ const findCol = (headers: string[], patterns: string[]): number => {
 };
 
 export function useGoogleSheetsSync() {
-  const { dispatch } = useStore();
+  const { syncComplete } = useStore();
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncData, setSyncData] = useState<Medicine[] | null>(null);
@@ -85,7 +85,7 @@ export function useGoogleSheetsSync() {
 
       console.log(`[Sync] Parsed ${medicines.length} medicines, skipped ${skipped} rows`);
 
-      dispatch({ type: 'SYNC_COMPLETE', payload: medicines });
+      syncComplete(medicines);
       setSyncData(medicines);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -94,7 +94,7 @@ export function useGoogleSheetsSync() {
     } finally {
       setSyncing(false);
     }
-  }, [dispatch]);
+  }, [syncComplete]);
 
   return { syncing, syncData, error, syncSheet };
 }
