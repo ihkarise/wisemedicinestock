@@ -11,7 +11,7 @@ export function StockPanel() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "low" | "empty" | "mt" | "dil">("all");
   const [showAddModal, setShowAddModal] = useState(false);
-  const { syncing, syncData, error } = useGoogleSheetsSync();
+  const { syncing, error, syncSheet } = useGoogleSheetsSync();
 
   const medicines = Object.values(state.stock) as StockItem[];
 
@@ -23,7 +23,7 @@ export function StockPanel() {
   const inOrder = state.orderList.length;
 
   const handleSync = async () => {
-    await syncData();
+    await syncSheet();
   };
 
   const filteredMedicines = useMemo(() => {
